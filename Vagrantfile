@@ -1,50 +1,53 @@
 BOX_OS = "centos/7"
 BOX_VERSION = "1706.02"
+MASTER_COUNT = 2
+NODE_COUNT = 4
 
 $token = "123456.1234567812345678"
+$hostnamePrefix = "kube"
+$masterSuffix = "master"
+$nodeSuffix = "node"
+$ipGroup = "192.168.100"
+$masterStartIp = 100
+$nodeStartIp = 10
+$masters = []
+$nodes = []
+$hostsCommand = ""
 
-$master = "master"
-$masterIpAddress = "192.168.100.10"
-$masterHostname = "kube-#{$master}"
+for i in 1..MASTER_COUNT
+$masters << {
+    name: "#{$masterSuffix}#{i}",
+    hostname: "#{$hostnamePrefix}-#{$masterSuffix}-#{i}",
+    ipAddress: "#{$ipGroup}.#{$masterStartIp + i}"
+}
+end
 
-$node1 = "node1"
-$node1IpAddress = "192.168.100.11"
-$node1Hostname = "kube-node1"
+for i in 1..NODE_COUNT
+$nodes << {
+    name: "#{$nodeSuffix}#{i}",
+    hostname: "#{$hostnamePrefix}-#{$nodeSuffix}-#{i}",
+    ipAddress: "#{$ipGroup}.#{$nodeStartIp + i}"
+}
+end
 
-$node2 = "node2"
-$node2IpAddress = "192.168.100.12"
-$node2Hostname = "kube-node2"
+for master in $masters
+    $hostsCommand << master[:ipAddress] + " " + master[:hostname] + "\n"
+end
 
-$node3 = "node3"
-$node3IpAddress = "192.168.100.13"
-$node3Hostname = "kube-node3"
+for node in $nodes
+    $hostsCommand << node[:ipAddress] + " " + node[:hostname] + "\n"
+end
+
+$hostsCommand = "echo \"#{$hostsCommand}\" >> /etc/hosts"
 
 $cmdPreInit = <<SCRIPT
 setenforce 0
-echo "#{$masterIpAddress} #{$masterHostname}
-#{$node1IpAddress} #{$node1Hostname}
-#{$node2IpAddress} #{$node2Hostname}
-#{$node3IpAddress} #{$node3Hostname}" >> /etc/hosts
+#{$hostsCommand}
 SCRIPT
 
-$cmdRenameMaster = <<SCRIPT
-hostname #{$masterHostname}
-echo "HOSTNAME=#{$masterHostname}" > /etc/sysconfig/network
-SCRIPT
-
-$cmdRenameNode1 = <<SCRIPT
-hostname #{$node1Hostname}
-echo "HOSTNAME=#{$node1Hostname}" > /etc/sysconfig/network
-SCRIPT
-
-$cmdRenameNode2 = <<SCRIPT
-hostname #{$node2Hostname}
-echo "HOSTNAME=#{$node2Hostname}" > /etc/sysconfig/network
-SCRIPT
-
-$cmdRenameNode3 = <<SCRIPT
-hostname #{$node3Hostname}
-echo "HOSTNAME=#{$node3Hostname}" > /etc/sysconfig/network
+$cmdRenameMachine = <<SCRIPT
+hostname %{hostname}
+echo "HOSTNAME=%{hostname}" > /etc/sysconfig/network
 SCRIPT
 
 $cmdInstallDnsmasq = <<SCRIPT
@@ -116,11 +119,13 @@ systemctl stop firewalld
 SCRIPT
 
 $cmdInitMaster = <<SCRIPT
-kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address #{$masterIpAddress} --apiserver-cert-extra-sans 10.0.2.15 --token #{$token}
+kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address %{ipAddress} --apiserver-cert-extra-sans 10.0.2.15 --token #{$token}
 SCRIPT
 
 $cmdInitNode = <<SCRIPT
-kubeadm join --token #{$token} #{$masterIpAddress}:6443
+if ping -c 1 %{masterIpAddress} &> /dev/null; then
+  kubeadm join --token #{$token} %{masterIpAddress}:6443
+fi
 SCRIPT
 
 $cmdSetupEnv = <<SCRIPT
@@ -135,94 +140,55 @@ kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documen
 SCRIPT
 
 Vagrant.configure("2") do |config|
-  config.vm.define $master do |box|
-    box.vm.box = BOX_OS
-    box.vm.box_version = BOX_VERSION
-    box.vm.provider "virtualbox" do |v|
-      v.memory = 2048
-      v.cpus = 1
+    $masters.each do |master|
+      config.vm.define master[:name] do |box|
+        box.vm.box = BOX_OS
+        box.vm.box_version = BOX_VERSION
+        box.vm.provider "virtualbox" do |v|
+          v.memory = 2048
+          v.cpus = 1
+        end
+        box.vm.network "private_network", ip: master[:ipAddress]
+        config.vm.provision "shell", inline: $cmdPreInit
+        config.vm.provision "shell", inline: $cmdRenameMachine % {hostname: master[:hostname]}
+        config.vm.provision "shell", inline: $cmdInstallDnsmasq
+        config.vm.provision "shell", inline: $cmdInstallDocker
+        config.vm.provision "shell", inline: $cmdAddKubeRepo
+        config.vm.provision "shell", inline: $cmdInstallKube
+        # config.vm.provision "shell", inline: $cmdInstallKubectl
+        config.vm.provision "shell", inline: $cmdSetKubeletConfig
+        config.vm.provision "shell", inline: $cmdIptablesWorkaround
+        config.vm.provision "shell", inline: $cmdDisableFirewall
+        config.vm.provision "shell", inline: $cmdInitMaster % {ipAddress: master[:ipAddress]}
+        config.vm.provision "shell", inline: $cmdSetupEnv
+        config.vm.provision "shell", inline: $cmdSetupFlannel
+        config.vm.synced_folder ".", "/vagrant", disabled: true
+      end
     end
-    box.vm.network "private_network", ip: "192.168.100.10"
-    config.vm.provision "shell", inline: $cmdPreInit
-    config.vm.provision "shell", inline: $cmdRenameMaster
-    config.vm.provision "shell", inline: $cmdInstallDnsmasq
-    config.vm.provision "shell", inline: $cmdInstallDocker
-    config.vm.provision "shell", inline: $cmdAddKubeRepo
-    config.vm.provision "shell", inline: $cmdInstallKube
-    config.vm.provision "shell", inline: $cmdInstallKubectl
-    config.vm.provision "shell", inline: $cmdSetKubeletConfig
-    config.vm.provision "shell", inline: $cmdIptablesWorkaround
-    config.vm.provision "shell", inline: $cmdDisableFirewall
-    config.vm.provision "shell", inline: $cmdInitMaster
-    config.vm.provision "shell", inline: $cmdSetupEnv
-    config.vm.provision "shell", inline: $cmdSetupFlannel
-    config.vm.synced_folder ".", "/vagrant", disabled: true
-  end
 
-  config.vm.define $node1 do |box|
-    box.vm.box = BOX_OS
-    box.vm.box_version = BOX_VERSION
-    box.vm.provider "virtualbox" do |v|
-      v.memory = 2048
-      v.cpus = 1
+    $nodes.each do |node|
+        config.vm.define node[:name] do |box|
+        box.vm.box = BOX_OS
+        box.vm.box_version = BOX_VERSION
+        box.vm.provider "virtualbox" do |v|
+          v.memory = 2048
+          v.cpus = 1
+        end
+        box.vm.network "private_network", ip: node[:ipAddress]
+        config.vm.provision "shell", inline: $cmdPreInit
+        config.vm.provision "shell", inline: $cmdRenameMachine % {hostname: node[:hostname]}
+        config.vm.provision "shell", inline: $cmdInstallDnsmasq
+        config.vm.provision "shell", inline: $cmdInstallDocker
+        config.vm.provision "shell", inline: $cmdAddKubeRepo
+        config.vm.provision "shell", inline: $cmdInstallKube
+        config.vm.provision "shell", inline: $cmdSetKubeletConfig
+        config.vm.provision "shell", inline: $cmdIptablesWorkaround
+        config.vm.provision "shell", inline: $cmdDisableFirewall
+        $masters.each do |master|
+            config.vm.provision "shell", inline: $cmdInitNode % {masterIpAddress: master[:ipAddress]}
+        end
+        # config.vm.provision "shell", inline: $cmdSetupFlannel
+        config.vm.synced_folder ".", "/vagrant", disabled: true
+      end
     end
-    box.vm.network "private_network", ip: "192.168.100.11"
-    config.vm.provision "shell", inline: $cmdPreInit
-    config.vm.provision "shell", inline: $cmdRenameNode1
-    config.vm.provision "shell", inline: $cmdInstallDnsmasq
-    config.vm.provision "shell", inline: $cmdInstallDocker
-    config.vm.provision "shell", inline: $cmdAddKubeRepo
-    config.vm.provision "shell", inline: $cmdInstallKube
-    config.vm.provision "shell", inline: $cmdSetKubeletConfig
-    config.vm.provision "shell", inline: $cmdIptablesWorkaround
-    config.vm.provision "shell", inline: $cmdDisableFirewall
-    config.vm.provision "shell", inline: $cmdInitNode
-    # config.vm.provision "shell", inline: $cmdSetupFlannel
-    config.vm.synced_folder ".", "/vagrant", disabled: true
-  end
-
-  config.vm.define $node2 do |box|
-    box.vm.box = BOX_OS
-    box.vm.box_version = BOX_VERSION
-    box.vm.provider "virtualbox" do |v|
-      v.memory = 2048
-      v.cpus = 1
-    end
-    box.vm.network "private_network", ip: "192.168.100.12"
-    config.vm.provision "shell", inline: $cmdPreInit
-    config.vm.provision "shell", inline: $cmdRenameNode2
-    config.vm.provision "shell", inline: $cmdInstallDnsmasq
-    config.vm.provision "shell", inline: $cmdInstallDocker
-    config.vm.provision "shell", inline: $cmdAddKubeRepo
-    config.vm.provision "shell", inline: $cmdInstallKube
-    config.vm.provision "shell", inline: $cmdSetKubeletConfig
-    config.vm.provision "shell", inline: $cmdIptablesWorkaround
-    config.vm.provision "shell", inline: $cmdDisableFirewall
-    config.vm.provision "shell", inline: $cmdInitNode
-    # config.vm.provision "shell", inline: $cmdSetupFlannel
-    config.vm.synced_folder ".", "/vagrant", disabled: true
-  end
-
-  config.vm.define $node3 do |box|
-    box.vm.box = BOX_OS
-    box.vm.box_version = BOX_VERSION
-    box.vm.provider "virtualbox" do |v|
-      v.memory = 2048
-      v.cpus = 1
-    end
-    box.vm.network "private_network", ip: "192.168.100.13"
-    config.vm.provision "shell", inline: $cmdPreInit
-    config.vm.provision "shell", inline: $cmdRenameNode3
-    config.vm.provision "shell", inline: $cmdInstallDnsmasq
-    config.vm.provision "shell", inline: $cmdInstallDocker
-    config.vm.provision "shell", inline: $cmdAddKubeRepo
-    config.vm.provision "shell", inline: $cmdInstallKube
-    config.vm.provision "shell", inline: $cmdSetKubeletConfig
-    config.vm.provision "shell", inline: $cmdIptablesWorkaround
-    config.vm.provision "shell", inline: $cmdDisableFirewall
-    config.vm.provision "shell", inline: $cmdInitNode
-    # config.vm.provision "shell", inline: $cmdSetupFlannel
-    config.vm.synced_folder ".", "/vagrant", disabled: true
-  end
-
 end
