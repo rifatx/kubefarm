@@ -48,6 +48,7 @@ SCRIPT
 $cmdRenameMachine = <<SCRIPT
 hostname %{hostname}
 echo "HOSTNAME=%{hostname}" > /etc/sysconfig/network
+systemctl restart network
 SCRIPT
 
 $cmdInstallDnsmasq = <<SCRIPT
@@ -59,7 +60,7 @@ chmod 444 /etc/resolv.conf
 chattr +i /etc/resolv.conf
 echo "server=8.8.8.8
 server=8.8.4.4" > /etc/dnsmasq.conf
-service dnsmasq restart
+systemctl enable dnsmasq && systemctl restart dnsmasq
 SCRIPT
 
 $cmdInstallDocker = <<SCRIPT
@@ -148,21 +149,22 @@ Vagrant.configure("2") do |config|
           v.memory = 2048
           v.cpus = 1
         end
+        box.vm.hostname = master[:hostname]
         box.vm.network "private_network", ip: master[:ipAddress]
-        config.vm.provision "shell", inline: $cmdPreInit
-        config.vm.provision "shell", inline: $cmdRenameMachine % {hostname: master[:hostname]}
-        config.vm.provision "shell", inline: $cmdInstallDnsmasq
-        config.vm.provision "shell", inline: $cmdInstallDocker
-        config.vm.provision "shell", inline: $cmdAddKubeRepo
-        config.vm.provision "shell", inline: $cmdInstallKube
-        # config.vm.provision "shell", inline: $cmdInstallKubectl
-        config.vm.provision "shell", inline: $cmdSetKubeletConfig
-        config.vm.provision "shell", inline: $cmdIptablesWorkaround
-        config.vm.provision "shell", inline: $cmdDisableFirewall
-        config.vm.provision "shell", inline: $cmdInitMaster % {ipAddress: master[:ipAddress]}
-        config.vm.provision "shell", inline: $cmdSetupEnv
-        config.vm.provision "shell", inline: $cmdSetupFlannel
-        config.vm.synced_folder ".", "/vagrant", disabled: true
+        box.vm.provision "shell", inline: $cmdPreInit
+        box.vm.provision "shell", inline: $cmdRenameMachine % {hostname: master[:hostname]}
+        box.vm.provision "shell", inline: $cmdInstallDnsmasq
+        box.vm.provision "shell", inline: $cmdInstallDocker
+        box.vm.provision "shell", inline: $cmdAddKubeRepo
+        box.vm.provision "shell", inline: $cmdInstallKube
+        # box.vm.provision "shell", inline: $cmdInstallKubectl
+        box.vm.provision "shell", inline: $cmdSetKubeletConfig
+        box.vm.provision "shell", inline: $cmdIptablesWorkaround
+        box.vm.provision "shell", inline: $cmdDisableFirewall
+        box.vm.provision "shell", inline: $cmdInitMaster % {ipAddress: master[:ipAddress]}
+        box.vm.provision "shell", inline: $cmdSetupEnv
+        box.vm.provision "shell", inline: $cmdSetupFlannel
+        box.vm.synced_folder ".", "/vagrant", disabled: true
       end
     end
 
@@ -174,21 +176,22 @@ Vagrant.configure("2") do |config|
           v.memory = 2048
           v.cpus = 1
         end
-        box.vm.network "private_network", ip: node[:ipAddress]
-        config.vm.provision "shell", inline: $cmdPreInit
-        config.vm.provision "shell", inline: $cmdRenameMachine % {hostname: node[:hostname]}
-        config.vm.provision "shell", inline: $cmdInstallDnsmasq
-        config.vm.provision "shell", inline: $cmdInstallDocker
-        config.vm.provision "shell", inline: $cmdAddKubeRepo
-        config.vm.provision "shell", inline: $cmdInstallKube
-        config.vm.provision "shell", inline: $cmdSetKubeletConfig
-        config.vm.provision "shell", inline: $cmdIptablesWorkaround
-        config.vm.provision "shell", inline: $cmdDisableFirewall
+        box.vm.hostname = node[:hostname]
+        box.network "private_network", ip: node[:ipAddress]
+        box.vm.provision "shell", inline: $cmdPreInit
+        box.vm.provision "shell", inline: $cmdRenameMachine % {hostname: node[:hostname]}
+        box.vm.provision "shell", inline: $cmdInstallDnsmasq
+        box.vm.provision "shell", inline: $cmdInstallDocker
+        box.vm.provision "shell", inline: $cmdAddKubeRepo
+        box.vm.provision "shell", inline: $cmdInstallKube
+        box.vm.provision "shell", inline: $cmdSetKubeletConfig
+        box.vm.provision "shell", inline: $cmdIptablesWorkaround
+        box.vm.provision "shell", inline: $cmdDisableFirewall
         $masters.each do |master|
-            config.vm.provision "shell", inline: $cmdInitNode % {masterIpAddress: master[:ipAddress]}
+            box.vm.provision "shell", inline: $cmdInitNode % {masterIpAddress: master[:ipAddress]}
         end
-        # config.vm.provision "shell", inline: $cmdSetupFlannel
-        config.vm.synced_folder ".", "/vagrant", disabled: true
+        # box.vm.provision "shell", inline: $cmdSetupFlannel
+        box.vm.synced_folder ".", "/vagrant", disabled: true
       end
     end
 end
